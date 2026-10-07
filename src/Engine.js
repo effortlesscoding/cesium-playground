@@ -4,6 +4,7 @@ import { generateFields, jitterFields } from "./fields.js";
 import { REGION } from "./config.js";
 import { PrimitiveRenderer } from "./renderers/PrimitiveRenderer.js";
 import { ImageryRenderer } from "./renderers/ImageryRenderer.js";
+import { ShaderRenderer } from "./renderers/ShaderRenderer.js";
 
 const newRendererStats = () => ({
   updates: 0,
@@ -14,6 +15,7 @@ const newRendererStats = () => ({
   workerWallMs: 0,
   mainBuildMs: 0,
   firstFrameMs: 0,
+  uploadMs: 0,
   vertices: 0,
   triangles: 0,
   transferBytes: 0,
@@ -34,11 +36,13 @@ export class Engine {
     this.stats = {
       primitive: newRendererStats(),
       imagery: newRendererStats(),
+      shader: newRendererStats(),
       frame: { fps: 0, avgFrameMs: 0, maxFrameMs: 0, avgRenderCpuMs: 0, maxRenderCpuMs: 0 },
     };
     this.fields = generateFields(params.fieldCount, REGION);
     this.primitive = new PrimitiveRenderer(viewer, this.stats.primitive);
     this.imagery = new ImageryRenderer(viewer, this.stats.imagery);
+    this.shader = new ShaderRenderer(viewer, this.stats.shader);
     this.primitive.onApplied = () => (this.awaitFirstFrame = true);
     this.installFrameMonitor();
     this.applyMode();
@@ -68,6 +72,7 @@ export class Engine {
       win.cpuMax = Math.max(win.cpuMax, cpu);
       // The synchronous Primitive batch (combine + GPU upload) happens inside the first
       // render after apply(), so that frame's CPU time is the real main-thread cost of A.
+      this.shader.onPostRender();
       if (this.awaitFirstFrame) {
         this.stats.primitive.firstFrameMs = cpu;
         this.awaitFirstFrame = false;
@@ -88,6 +93,10 @@ export class Engine {
     return this.params.mode === "primitive" || this.params.mode === "both";
   }
 
+  get useShader() {
+    return this.params.mode === "shader";
+  }
+
   get useImagery() {
     return this.params.mode === "imagery" || this.params.mode === "both";
   }
@@ -106,6 +115,7 @@ export class Engine {
   applyMode() {
     if (!this.usePrimitive) this.primitive.clear();
     if (!this.useImagery) this.imagery.clear();
+    if (!this.useShader) this.shader.clear();
   }
 
   restartTimer() {
@@ -121,11 +131,13 @@ export class Engine {
   render() {
     if (this.usePrimitive) this.primitive.update(this.fields, this.params);
     if (this.useImagery) this.imagery.update(this.fields, this.params);
+    if (this.useShader) this.shader.update(this.fields, this.params);
   }
 
   resetCounters() {
     this.stats.primitive = Object.assign(this.stats.primitive, newRendererStats());
     this.stats.imagery = Object.assign(this.stats.imagery, newRendererStats());
+    this.stats.shader = Object.assign(this.stats.shader, newRendererStats());
   }
 
   destroy() {
@@ -134,5 +146,6 @@ export class Engine {
     this.removePostRender();
     this.primitive.destroy();
     this.imagery.destroy();
+    this.shader.destroy();
   }
 }

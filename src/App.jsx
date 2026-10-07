@@ -12,6 +12,7 @@ import { Engine } from "./Engine.js";
 const MODES = [
   { value: "primitive", label: "A · Primitives" },
   { value: "imagery", label: "B · Imagery" },
+  { value: "shader", label: "C · Shader" },
   { value: "both", label: "Both" },
   { value: "none", label: "None" },
 ];
@@ -21,14 +22,14 @@ const NUMBER_PARAMS = [
   { key: "updateIntervalMs", label: "Update interval (ms, 0 = off)", min: 0, max: 10000, step: 50 },
   { key: "jitterScale", label: "Jitter scale", min: 0, max: 20, step: 0.1 },
   { key: "segments", label: "Segments per circle", min: 4, max: 4096, step: 1 },
-  { key: "rings", label: "Fill rings (A)", min: 1, max: 128, step: 1 },
-  { key: "heightMeters", label: "Height m (A)", min: 0, max: 50000, step: 10 },
+  { key: "rings", label: "Fill rings (A, C)", min: 1, max: 128, step: 1 },
+  { key: "heightMeters", label: "Height m (A, C)", min: 0, max: 50000, step: 10 },
   { key: "geometryWorkers", label: "Geometry workers (A)", min: 1, max: 16, step: 1 },
   { key: "tileWorkers", label: "Tile workers (B)", min: 1, max: 16, step: 1 },
   { key: "maximumLevel", label: "Max tile level (B)", min: 0, max: 20, step: 1 },
 ];
 
-const BENCH_MODES = ["none", "primitive", "imagery"];
+const BENCH_MODES = ["none", "primitive", "imagery", "shader"];
 const BENCH_WARMUP_MS = 2500;
 const BENCH_SAMPLE_MS = 8000;
 
@@ -125,7 +126,7 @@ export default function App() {
       }
       const avg = (k) => samples.reduce((a, s) => a + s[k], 0) / samples.length;
       const max = (k) => Math.max(...samples.map((s) => s[k]));
-      const rs = mode === "primitive" ? e.stats.primitive : mode === "imagery" ? e.stats.imagery : null;
+      const rs = e.stats[mode] ?? null;
       results.push({
         mode,
         fps: avg("fps"),
@@ -146,6 +147,7 @@ export default function App() {
 
   const a = snap?.primitive;
   const b = snap?.imagery;
+  const c = snap?.shader;
   const f = snap?.frame;
   const d = snap?.derived;
 
@@ -188,7 +190,7 @@ export default function App() {
             </label>
           ))}
           <label>
-            <span>Draw style (A)</span>
+            <span>Draw style (A, C)</span>
             <select value={params.primitiveStyle} onChange={(e) => set("primitiveStyle", e.target.value)}>
               <option value="fill+outline">fill + outline</option>
               <option value="fill">fill</option>
@@ -248,9 +250,22 @@ export default function App() {
         </section>
 
         <section>
+          <h2>C · Shader</h2>
+          <table>
+            <tbody>
+              <tr><td>Instances × verts / triangles</td><td>{fmtInt(c?.vertices)} / {fmtInt(c?.triangles)}</td></tr>
+              <tr><td>Main: pack instances ms</td><td>{fmt(c?.mainBuildMs, 2)}</td></tr>
+              <tr><td>Main: buffer upload ms</td><td>{fmt(c?.uploadMs, 2)}</td></tr>
+              <tr><td>Uploaded / update</td><td>{c ? fmtBytes(c.transferBytes) : "–"}</td></tr>
+              <tr><td>Updates</td><td>{fmtInt(c?.updates)}</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section>
           <h2>Benchmark</h2>
           <p className="hint">
-            Runs None → A → B for {BENCH_SAMPLE_MS / 1000}s each with the current parameters. Keep the camera still.
+            Runs None → A → B → C for {BENCH_SAMPLE_MS / 1000}s each with the current parameters. Keep the camera still.
           </p>
           <button onClick={runBenchmark} disabled={bench.running}>
             {bench.running ? `Running… ${bench.step}` : "Run benchmark"}
