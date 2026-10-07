@@ -1,0 +1,144 @@
+:root {
+  --panel-bg: rgba(20, 22, 28, 0.92);
+  --panel-fg: #e6e8ee;
+  --muted: #9aa1b1;
+  --accent: #4ea1ff;
+  --border: rgba(255, 255, 255, 0.12);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+.app {
+  display: flex;
+  height: 100%;
+}
+
+.viewer {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+
+.panel {
+  width: 360px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  color: var(--panel-fg);
+  padding: 12px 14px 24px;
+  border-left: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
+h1 {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+
+h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+
+section {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+button {
+  background: #2a2e38;
+  color: var(--panel-fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+
+button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.params {
+  display: grid;
+  gap: 6px;
+}
+
+.params label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.params input,
+.params select {
+  width: 110px;
+  background: #11131a;
+  color: var(--panel-fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font: inherit;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+td,
+th {
+  padding: 2px 0;
+}
+
+td:last-child {
+  text-align: right;
+}
+
+.bench {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.bench th,
+.bench td {
+  text-align: right;
+  padding: 2px 3px;
+}
+
+.bench th:first-child,
+.bench td:first-child {
+  text-align: left;
+}
+
+.hint {
+  color: var(--muted);
+  margin: 0 0 8px;
+}
