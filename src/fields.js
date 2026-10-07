@@ -31,6 +31,8 @@ export function generateFields(count, region) {
  * Full circles rotate as a unit so they stay full circles.
  */
 export function jitterFields(fields, region, scale) {
+  // Positional jitter is proportional to the region so fields stay put at any scale.
+  const drift = (region.spread / 360) * scale;
   return fields.map((f) => {
     const full = clockSpan(f) === 0;
     const startDelta = rand(-0.15, 0.15) * scale;
@@ -44,8 +46,8 @@ export function jitterFields(fields, region, scale) {
     }
     return {
       id: f.id,
-      lat: clamp(f.lat + rand(-0.05, 0.05) * scale, -80, 80),
-      lon: f.lon + rand(-0.05, 0.05) * scale,
+      lat: clamp(f.lat + rand(-drift, drift), -80, 80),
+      lon: f.lon + rand(-drift, drift),
       radius: clamp(f.radius * (1 + rand(-0.03, 0.03) * scale), region.minRadius / 2, region.maxRadius * 2),
       startClock,
       endClock,

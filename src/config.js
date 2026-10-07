@@ -23,9 +23,11 @@ export const DEFAULT_PARAMS = {
 };
 
 export const REGION = {
-  lat: 39,
-  lon: -98,
-  spread: 18, // degrees of latitude; longitude spread is 2x this
-  minRadius: 15_000,
-  maxRadius: 120_000,
+  // Abu Dhabi city
+  lat: 24.4539,
+  lon: 54.3773,
+  spread: 0.12, // degrees of latitude; longitude spread is 2x this
+  minRadius: 120,
+  maxRadius: 1_000,
+  cameraHeight: 40_000,
 };

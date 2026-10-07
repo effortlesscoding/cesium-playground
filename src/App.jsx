@@ -67,7 +67,7 @@ export default function App() {
       scene3DOnly: true, // skips 2D/CV projection work in the Primitive pipeline
     });
     viewer.scene.debugShowFramesPerSecond = false;
-    viewer.camera.setView({ destination: Cartesian3.fromDegrees(REGION.lon, REGION.lat, 4_500_000) });
+    viewer.camera.setView({ destination: Cartesian3.fromDegrees(REGION.lon, REGION.lat, REGION.cameraHeight) });
     engineRef.current = new Engine(viewer, DEFAULT_PARAMS);
     return () => {
       engineRef.current.destroy();
