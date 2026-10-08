@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Cartesian3,
+  Color,
+  EllipsoidTerrainProvider,
   ImageryLayer,
+  Material,
   TileMapServiceImageryProvider,
   Viewer,
   buildModuleUrl,
 } from "cesium";
 import { DEFAULT_PARAMS, REGION } from "./config.js";
 import { Engine } from "./Engine.js";
+import { hillsTerrain } from "./terrain.js";
 
 const MODES = [
   { value: "primitive", label: "A · Primitives" },
   { value: "imagery", label: "B · Imagery" },
   { value: "shader", label: "C · Shader" },
+  { value: "ground", label: "D · Ground" },
   { value: "both", label: "Both" },
   { value: "none", label: "None" },
 ];
@@ -23,13 +28,14 @@ const NUMBER_PARAMS = [
   { key: "jitterScale", label: "Jitter scale", min: 0, max: 20, step: 0.1 },
   { key: "segments", label: "Segments per circle", min: 4, max: 4096, step: 1 },
   { key: "rings", label: "Fill rings (A, C)", min: 1, max: 128, step: 1 },
-  { key: "heightMeters", label: "Height m (A, C)", min: 0, max: 50000, step: 10 },
+  { key: "heightMeters", label: "Height m (A, C, D)", min: 0, max: 50000, step: 10 },
+  { key: "groundRange", label: "Clamp range ± m (D)", min: 10, max: 20000, step: 10 },
   { key: "geometryWorkers", label: "Geometry workers (A)", min: 1, max: 16, step: 1 },
   { key: "tileWorkers", label: "Tile workers (B)", min: 1, max: 16, step: 1 },
   { key: "maximumLevel", label: "Max tile level (B)", min: 0, max: 20, step: 1 },
 ];
 
-const BENCH_MODES = ["none", "primitive", "imagery", "shader"];
+const BENCH_MODES = ["none", "primitive", "imagery", "shader", "ground"];
 const BENCH_WARMUP_MS = 2500;
 const BENCH_SAMPLE_MS = 8000;
 
@@ -70,6 +76,7 @@ export default function App() {
     viewer.scene.debugShowFramesPerSecond = false;
     viewer.camera.setView({ destination: Cartesian3.fromDegrees(REGION.lon, REGION.lat, REGION.cameraHeight) });
     engineRef.current = new Engine(viewer, DEFAULT_PARAMS);
+    if (import.meta.env.DEV) Object.assign(window, { __engine: engineRef.current, __Cartesian3: Cartesian3 }); // console experiments
     return () => {
       engineRef.current.destroy();
       engineRef.current = null;
@@ -80,6 +87,17 @@ export default function App() {
   useEffect(() => {
     engineRef.current?.setParams(params);
   }, [params]);
+
+  useEffect(() => {
+    const viewer = engineRef.current?.viewer;
+    if (!viewer) return;
+    const hills = params.terrain === "hills";
+    viewer.scene.terrainProvider = hills ? hillsTerrain() : new EllipsoidTerrainProvider();
+    // The base imagery is unshaded, so draw elevation contours to make the relief visible.
+    viewer.scene.globe.material = hills
+      ? Material.fromType(Material.ElevationContourType, { spacing: 20, width: 1, color: Color.WHITE })
+      : undefined;
+  }, [params.terrain]);
 
   // Poll stats twice a second; derive rates from deltas.
   useEffect(() => {
@@ -148,6 +166,7 @@ export default function App() {
   const a = snap?.primitive;
   const b = snap?.imagery;
   const c = snap?.shader;
+  const g = snap?.ground;
   const f = snap?.frame;
   const d = snap?.derived;
 
@@ -196,6 +215,13 @@ export default function App() {
               <option value="fill">fill</option>
               <option value="outline">outline</option>
               <option value="points">points</option>
+            </select>
+          </label>
+          <label>
+            <span>Terrain</span>
+            <select value={params.terrain} onChange={(e) => set("terrain", e.target.value)}>
+              <option value="flat">flat (ellipsoid)</option>
+              <option value="hills">synthetic hills</option>
             </select>
           </label>
           <label>
@@ -263,9 +289,22 @@ export default function App() {
         </section>
 
         <section>
+          <h2>D · Ground</h2>
+          <table>
+            <tbody>
+              <tr><td>Instances × verts / triangles</td><td>{fmtInt(g?.vertices)} / {fmtInt(g?.triangles)}</td></tr>
+              <tr><td>Main: pack instances ms</td><td>{fmt(g?.mainBuildMs, 2)}</td></tr>
+              <tr><td>Main: buffer upload ms</td><td>{fmt(g?.uploadMs, 2)}</td></tr>
+              <tr><td>Uploaded / update</td><td>{g ? fmtBytes(g.transferBytes) : "–"}</td></tr>
+              <tr><td>Updates</td><td>{fmtInt(g?.updates)}</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section>
           <h2>Benchmark</h2>
           <p className="hint">
-            Runs None → A → B → C for {BENCH_SAMPLE_MS / 1000}s each with the current parameters. Keep the camera still.
+            Runs None → A → B → C → D for {BENCH_SAMPLE_MS / 1000}s each with the current parameters. Keep the camera still.
           </p>
           <button onClick={runBenchmark} disabled={bench.running}>
             {bench.running ? `Running… ${bench.step}` : "Run benchmark"}

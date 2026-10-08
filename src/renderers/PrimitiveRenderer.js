@@ -242,6 +242,7 @@ export class PrimitiveRenderer {
   }
 
   clear() {
+    this.jobId++; // an update still in flight must not re-add primitives after we clear
     const prims = this.viewer.scene.primitives;
     for (const k of ["fillPrimitive", "linePrimitive", "points"]) {
       if (this[k]) prims.remove(this[k]);

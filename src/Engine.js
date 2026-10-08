@@ -5,6 +5,7 @@ import { REGION } from "./config.js";
 import { PrimitiveRenderer } from "./renderers/PrimitiveRenderer.js";
 import { ImageryRenderer } from "./renderers/ImageryRenderer.js";
 import { ShaderRenderer } from "./renderers/ShaderRenderer.js";
+import { GroundRenderer } from "./renderers/GroundRenderer.js";
 
 const newRendererStats = () => ({
   updates: 0,
@@ -37,12 +38,14 @@ export class Engine {
       primitive: newRendererStats(),
       imagery: newRendererStats(),
       shader: newRendererStats(),
+      ground: newRendererStats(),
       frame: { fps: 0, avgFrameMs: 0, maxFrameMs: 0, avgRenderCpuMs: 0, maxRenderCpuMs: 0 },
     };
     this.fields = generateFields(params.fieldCount, REGION);
     this.primitive = new PrimitiveRenderer(viewer, this.stats.primitive);
     this.imagery = new ImageryRenderer(viewer, this.stats.imagery);
     this.shader = new ShaderRenderer(viewer, this.stats.shader);
+    this.ground = new GroundRenderer(viewer, this.stats.ground);
     this.primitive.onApplied = () => (this.awaitFirstFrame = true);
     this.installFrameMonitor();
     this.applyMode();
@@ -73,6 +76,7 @@ export class Engine {
       // The synchronous Primitive batch (combine + GPU upload) happens inside the first
       // render after apply(), so that frame's CPU time is the real main-thread cost of A.
       this.shader.onPostRender();
+      this.ground.onPostRender();
       if (this.awaitFirstFrame) {
         this.stats.primitive.firstFrameMs = cpu;
         this.awaitFirstFrame = false;
@@ -97,6 +101,10 @@ export class Engine {
     return this.params.mode === "shader";
   }
 
+  get useGround() {
+    return this.params.mode === "ground";
+  }
+
   get useImagery() {
     return this.params.mode === "imagery" || this.params.mode === "both";
   }
@@ -107,7 +115,7 @@ export class Engine {
     if (next.fieldCount !== prev.fieldCount) this.fields = generateFields(next.fieldCount, REGION);
     if (next.updateIntervalMs !== prev.updateIntervalMs) this.restartTimer();
     if (next.mode !== prev.mode) this.applyMode();
-    const geometryChanged = ["fieldCount", "segments", "rings", "primitiveStyle", "heightMeters", "tileSize", "maximumLevel", "mode"]
+    const geometryChanged = ["fieldCount", "segments", "rings", "primitiveStyle", "heightMeters", "groundRange", "tileSize", "maximumLevel", "mode"]
       .some((k) => next[k] !== prev[k]);
     if (geometryChanged) this.render();
   }
@@ -116,6 +124,7 @@ export class Engine {
     if (!this.usePrimitive) this.primitive.clear();
     if (!this.useImagery) this.imagery.clear();
     if (!this.useShader) this.shader.clear();
+    if (!this.useGround) this.ground.clear();
   }
 
   restartTimer() {
@@ -132,12 +141,14 @@ export class Engine {
     if (this.usePrimitive) this.primitive.update(this.fields, this.params);
     if (this.useImagery) this.imagery.update(this.fields, this.params);
     if (this.useShader) this.shader.update(this.fields, this.params);
+    if (this.useGround) this.ground.update(this.fields, this.params);
   }
 
   resetCounters() {
     this.stats.primitive = Object.assign(this.stats.primitive, newRendererStats());
     this.stats.imagery = Object.assign(this.stats.imagery, newRendererStats());
     this.stats.shader = Object.assign(this.stats.shader, newRendererStats());
+    this.stats.ground = Object.assign(this.stats.ground, newRendererStats());
   }
 
   destroy() {
@@ -147,5 +158,6 @@ export class Engine {
     this.primitive.destroy();
     this.imagery.destroy();
     this.shader.destroy();
+    this.ground.destroy();
   }
 }

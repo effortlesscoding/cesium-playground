@@ -14,6 +14,10 @@ export const DEFAULT_PARAMS = {
   // A: what to draw from the generated Cartesian3 points.
   primitiveStyle: "fill+outline", // "fill+outline" | "fill" | "outline" | "points"
   heightMeters: 10,
+  // D: fields are projected onto any surface within +/- this many meters of the field's height.
+  groundRange: 1000,
+  // "flat" = ellipsoid; "hills" = synthetic terrain to show which modes follow the ground.
+  terrain: "flat",
   // Worker pool sizes.
   geometryWorkers: Math.max(1, Math.min(4, cores - 1)),
   tileWorkers: Math.max(1, Math.min(4, cores - 1)),
