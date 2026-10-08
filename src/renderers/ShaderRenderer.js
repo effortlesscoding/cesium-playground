@@ -1,12 +1,12 @@
 // Approach C: GPU-instanced fields. One static unit mesh (a disk/pie parameterized by radial
 // fraction + angular fraction) is drawn once per field; the vertex shader places every vertex
-// on the globe from per-instance data (center, radius, start bearing, sweep, color).
+// on the globe from per-instance data (center, radius, start bearing, sweep).
 //
 // Per tick the only work is packing ~40 bytes per field and one bufferSubData. There are no
 // geometry workers, no vertex/index rebuilds and no Primitive batching/combining.
 //
 // It is a Primitive-like object added to scene.primitives, so culling, log-depth, the
-// translucent pass and frame-state plumbing are Cesium's; only the geometry math is ours.
+// opaque pass and frame-state plumbing are Cesium's; only the geometry math is ours.
 import {
   BlendingState,
   BoundingSphere,
@@ -21,36 +21,60 @@ import {
   RenderState,
   ShaderProgram,
   ShaderSource,
+  StencilFunction,
+  StencilOperation,
   VertexArray,
 } from "cesium";
-import { TWO_PI, DEG, clockSpan, fieldRgb, toEcef } from "../geo.js";
+import { TWO_PI, DEG, clockSpan, toEcef } from "../geo.js";
 
 // Per-instance dynamic data, in floats: centerHigh(3) centerLow(3) shape(4).
 const FLOATS = 10;
 const STRIDE = FLOATS * 4;
 // Same sphere radius the CPU path (geo.js destinations) uses for great-circle distances.
 const MEAN_EARTH_RADIUS = 6371008.8;
-const FILL_ALPHA = 0.45;
+// Every field is drawn in the same aqua; the fill is see-through, the outline is solid.
+const FILL_ALPHA = 0.3;
+// Visible outline width in pixels. The line is drawn twice this wide, centered on the field's
+// edge, and only the half that falls outside every fill is visible (see COVERED_BIT).
+const OUTLINE_PX = 1.5;
+// Stencil bit (one of Cesium's classification bits, which nothing here uses) marking pixels some
+// fill has covered. The scene clears it every frame.
+//  - Fill: each pixel passes the test once, so overlapping fields merge into one flat color
+//    instead of compositing on top of each other.
+//  - Outline: drawn only where no fill covers the pixel, so edges that lie inside another
+//    field vanish and what's left is the outline of the union.
+const COVERED_BIT = 0x01;
+const KEEP = { fail: StencilOperation.KEEP, zFail: StencilOperation.KEEP, zPass: StencilOperation.KEEP };
+const MARK = { fail: StencilOperation.KEEP, zFail: StencilOperation.KEEP, zPass: StencilOperation.REPLACE };
+const stencilTest = (operation) => ({
+  enabled: true,
+  frontFunction: StencilFunction.NOT_EQUAL,
+  backFunction: StencilFunction.NOT_EQUAL,
+  reference: COVERED_BIT,
+  mask: COVERED_BIT,
+  frontOperation: operation,
+  backOperation: operation,
+});
 
-const ATTRIBUTE_LOCATIONS = { unit: 0, centerHigh: 1, centerLow: 2, shape: 3, color: 4 };
+const FILL_LOCATIONS = { unit: 0, centerHigh: 1, centerLow: 2, shape: 3 };
+const LINE_LOCATIONS = { unit: 0, centerHigh: 1, centerLow: 2, shape: 3, other: 4 };
 
-const VS = `
-in vec3 unit;        // x: radial fraction 0..1, y: angular fraction 0..1, z: 1 on the pie's radial edges
+// Per-instance inputs plus the function that places a unit-mesh vertex on the globe.
+const COMMON = `
 in vec3 centerHigh;  // field center in ECEF (meters, incl. height), split into high/low parts
 in vec3 centerLow;
 in vec4 shape;       // x: radius m, y: start bearing rad (clockwise from north), z: sweep rad, w: 1 if full circle
-in vec4 color;       // normalized ubyte rgba
-uniform float u_alpha;
-out vec4 v_color;
 
 const float R = ${MEAN_EARTH_RADIUS.toFixed(1)};
+const vec3 AQUA = vec3(0.0, 0.9, 1.0);
 const float A2_OVER_B2 = 1.006739496742; // WGS84 a^2 / b^2: ellipsoid normal ~ (x, y, z * a^2/b^2)
 
-void main()
+// u.x: radial fraction 0..1, u.y: angular fraction 0..1, u.z: 1 on the pie's radial edges.
+vec4 fieldClip(vec3 u)
 {
     // Full circles have no radial edges: collapse them onto the center (zero-length lines).
-    float s = unit.x * (1.0 - unit.z * shape.w);
-    float bearing = shape.y + unit.y * shape.z;
+    float s = u.x * (1.0 - u.z * shape.w);
+    float bearing = shape.y + u.y * shape.z;
     float theta = s * shape.x / R;
 
     vec3 c = centerHigh + centerLow;
@@ -65,9 +89,47 @@ void main()
     float h = sin(0.5 * theta);
     vec4 p = czm_translateRelativeToEye(centerHigh, centerLow);
     p.xyz += tangent * (R * sin(theta)) - up * (2.0 * R * h * h);
+    return czm_modelViewProjectionRelativeToEye * p;
+}
+`;
 
-    gl_Position = czm_modelViewProjectionRelativeToEye * p;
-    v_color = vec4(color.rgb, u_alpha);
+const FILL_VS = `
+in vec3 unit;
+${COMMON}
+uniform float u_alpha;
+out vec4 v_color;
+void main()
+{
+    gl_Position = fieldClip(unit);
+    v_color = vec4(AQUA, u_alpha);
+}
+`;
+
+// Each outline segment is a screen-space quad: 4 vertices, each knowing its own end (unit.xyz),
+// the opposite end (other) and which side of the line it sits on (unit.w = -1 or +1).
+const LINE_VS = `
+in vec4 unit;
+in vec3 other;
+${COMMON}
+uniform float u_widthPx;
+out vec4 v_color;
+void main()
+{
+    vec4 a = fieldClip(unit.xyz);
+    vec4 b = fieldClip(other);
+    vec2 viewport = czm_viewport.zw;
+    vec2 pa = a.xy / a.w * 0.5 * viewport;
+    vec2 pb = b.xy / b.w * 0.5 * viewport;
+    vec2 d = pb - pa;
+    float len = length(d);
+    vec2 dir = len > 1e-4 ? d / len : vec2(1.0, 0.0);
+    vec2 normal = vec2(-dir.y, dir.x);
+    float halfW = 0.5 * u_widthPx;
+    // Extend each end by half the width (square caps) so consecutive segments leave no gaps.
+    vec2 offsetPx = -dir * halfW + normal * unit.w * halfW;
+    gl_Position = a;
+    gl_Position.xy += offsetPx * 2.0 / viewport * a.w;
+    v_color = vec4(AQUA, 1.0);
 }
 `;
 
@@ -79,47 +141,53 @@ void main()
 }
 `;
 
-/** Static unit mesh shared by every field. */
+/** Static unit meshes shared by every field. */
 function buildMesh(segments, rings, style) {
   const m = segments + 1; // samples per ring (last == first for full circles; harmless)
-  const out = {};
 
-  if (style !== "outline") {
-    const pos = new Float32Array((1 + rings * m) * 3); // vertex 0 = center (zeros)
-    let p = 3;
-    for (let k = 1; k <= rings; k++) {
-      for (let j = 0; j < m; j++) {
-        pos[p++] = k / rings;
-        pos[p++] = j / segments;
-        pos[p++] = 0;
-      }
-    }
-    const v = (k, j) => 1 + (k - 1) * m + j;
-    const idx = [];
-    for (let j = 0; j < segments; j++) idx.push(0, v(1, j), v(1, j + 1));
-    for (let k = 2; k <= rings; k++) {
-      for (let j = 0; j < segments; j++) {
-        const a = v(k - 1, j), b = v(k - 1, j + 1), c = v(k, j), d = v(k, j + 1);
-        idx.push(a, c, d, a, d, b);
-      }
-    }
-    out.fill = { positions: pos, indices: idx, primitiveType: PrimitiveType.TRIANGLES };
-  }
-
-  if (style !== "fill") {
-    // Outer arc, then two radial edges (center -> arc start, arc end -> center).
-    const pos = new Float32Array((m + 4) * 3);
-    let p = 0;
+  // The fill is always built: with style "outline" it is drawn color-masked, purely to mark
+  // the stencil so the outline can hide edges inside other fields.
+  const pos = new Float32Array((1 + rings * m) * 3); // vertex 0 = center (zeros)
+  let p = 3;
+  for (let k = 1; k <= rings; k++) {
     for (let j = 0; j < m; j++) {
-      pos[p++] = 1;
+      pos[p++] = k / rings;
       pos[p++] = j / segments;
       pos[p++] = 0;
     }
-    pos.set([0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1], p);
-    const idx = [];
-    for (let j = 0; j < segments; j++) idx.push(j, j + 1);
-    idx.push(m, m + 1, m + 2, m + 3);
-    out.line = { positions: pos, indices: idx, primitiveType: PrimitiveType.LINES };
+  }
+  const v = (k, j) => 1 + (k - 1) * m + j;
+  const idx = [];
+  for (let j = 0; j < segments; j++) idx.push(0, v(1, j), v(1, j + 1));
+  for (let k = 2; k <= rings; k++) {
+    for (let j = 0; j < segments; j++) {
+      const a = v(k - 1, j), b = v(k - 1, j + 1), c = v(k, j), d = v(k, j + 1);
+      idx.push(a, c, d, a, d, b);
+    }
+  }
+  const out = { fill: { attributes: [{ data: pos, size: 3 }], indices: idx } };
+
+  if (style !== "fill") {
+    // Segments of the outline: the outer arc, then two radial edges (center -> arc start,
+    // arc end -> center). Each becomes a quad of 4 vertices.
+    const segs = [];
+    for (let j = 0; j < segments; j++) segs.push([[1, j / segments, 0], [1, (j + 1) / segments, 0]]);
+    segs.push([[0, 0, 1], [1, 0, 1]], [[1, 1, 1], [0, 1, 1]]);
+
+    const self = new Float32Array(segs.length * 4 * 4);
+    const other = new Float32Array(segs.length * 4 * 3);
+    const lineIdx = [];
+    segs.forEach(([A, B], i) => {
+      const ends = [[A, B, -1], [A, B, 1], [B, A, -1], [B, A, 1]];
+      ends.forEach(([s, o, side], k) => {
+        const vi = i * 4 + k;
+        self.set([s[0], s[1], s[2], side], vi * 4);
+        other.set(o, vi * 3);
+      });
+      const b = i * 4;
+      lineIdx.push(b, b + 1, b + 2, b + 2, b + 1, b + 3);
+    });
+    out.line = { attributes: [{ data: self, size: 4 }, { data: other, size: 3 }], indices: lineIdx };
   }
   return out;
 }
@@ -134,16 +202,14 @@ class FieldsPrimitive {
     this.boundingSphere = new BoundingSphere();
     // Staged by the renderer on the main thread, consumed in update().
     this.instances = null; // Float32Array, FLOATS per field
-    this.colors = null; // Uint8Array, 4 per field
     this.meshDirty = true;
     this.instancesDirty = false;
-    this.colorsDirty = false;
     this.capacity = 0;
     this.instanceBuffer = null;
-    this.colorBuffer = null;
     this.commands = [];
     this.resources = [];
-    this.shader = null;
+    this.fillShader = null;
+    this.lineShader = null;
     this.lastUploadMs = 0;
   }
 
@@ -155,13 +221,9 @@ class FieldsPrimitive {
     this.meshDirty = true;
   }
 
-  setInstances(instances, colors, count, colorsChanged) {
+  setInstances(instances, count) {
     this.instances = instances;
     this.instancesDirty = true;
-    if (colorsChanged) {
-      this.colors = colors;
-      this.colorsDirty = true;
-    }
     this.count = count;
   }
 
@@ -173,8 +235,7 @@ class FieldsPrimitive {
 
   releaseInstanceBuffers() {
     this.instanceBuffer?.destroy();
-    this.colorBuffer?.destroy();
-    this.instanceBuffer = this.colorBuffer = null;
+    this.instanceBuffer = null;
   }
 
   update(frameState) {
@@ -185,7 +246,6 @@ class FieldsPrimitive {
       this.releaseInstanceBuffers();
       this.releaseMesh();
       this.meshDirty = true;
-      this.colorsDirty = true;
     }
     if (!this.instanceBuffer) {
       this.capacity = this.count;
@@ -194,23 +254,13 @@ class FieldsPrimitive {
         sizeInBytes: this.count * STRIDE,
         usage: BufferUsage.DYNAMIC_DRAW,
       });
-      this.colorBuffer = Buffer.createVertexBuffer({
-        context,
-        sizeInBytes: this.count * 4,
-        usage: BufferUsage.STATIC_DRAW,
-      });
-      // Shared by the fill and outline vertex arrays; we destroy them ourselves.
+      // Shared by the fill and outline vertex arrays; we destroy it ourselves.
       this.instanceBuffer.vertexArrayDestroyable = false;
-      this.colorBuffer.vertexArrayDestroyable = false;
       this.meshDirty = true;
       this.instancesDirty = true;
     }
     if (this.meshDirty) this.buildCommands(context);
 
-    if (this.colorsDirty && this.colors) {
-      this.colorBuffer.copyFromArrayView(this.colors);
-      this.colorsDirty = false;
-    }
     if (this.instancesDirty) {
       const t0 = performance.now();
       this.instanceBuffer.copyFromArrayView(this.instances.subarray(0, this.count * FLOATS));
@@ -231,53 +281,95 @@ class FieldsPrimitive {
     this.meshDirty = false;
     const mesh = buildMesh(this.segments, this.rings, this.style);
 
-    this.shader ??= ShaderProgram.fromCache({
-      context,
-      vertexShaderSource: new ShaderSource({ sources: [VS] }),
-      fragmentShaderSource: new ShaderSource({ sources: [FS] }),
-      attributeLocations: ATTRIBUTE_LOCATIONS,
+    const program = (vs, locations) =>
+      ShaderProgram.fromCache({
+        context,
+        vertexShaderSource: new ShaderSource({ sources: [vs] }),
+        fragmentShaderSource: new ShaderSource({ sources: [FS] }),
+        attributeLocations: locations,
+      });
+    this.fillShader ??= program(FILL_VS, FILL_LOCATIONS);
+    this.lineShader ??= program(LINE_VS, LINE_LOCATIONS);
+
+    const instanced = (index, size, offsetInBytes) => ({
+      index,
+      vertexBuffer: this.instanceBuffer,
+      componentsPerAttribute: size,
+      componentDatatype: ComponentDatatype.FLOAT,
+      offsetInBytes,
+      strideInBytes: STRIDE,
+      instanceDivisor: 1,
     });
 
-    const make = ({ positions, indices, primitiveType }, alpha) => {
-      const big = positions.length / 3 > 65535;
+    const make = ({ attributes, indices }, shaderProgram, renderState, uniformMap) => {
+      const big = attributes[0].data.length / attributes[0].size > 65535;
       const indexBuffer = Buffer.createIndexBuffer({
         context,
         typedArray: big ? new Uint32Array(indices) : new Uint16Array(indices),
         usage: BufferUsage.STATIC_DRAW,
         indexDatatype: big ? IndexDatatype.UNSIGNED_INT : IndexDatatype.UNSIGNED_SHORT,
       });
-      const unitBuffer = Buffer.createVertexBuffer({ context, typedArray: positions, usage: BufferUsage.STATIC_DRAW });
+      const meshAttributes = attributes.map(({ data, size }, i) => {
+        const vertexBuffer = Buffer.createVertexBuffer({ context, typedArray: data, usage: BufferUsage.STATIC_DRAW });
+        this.resources.push(vertexBuffer);
+        // Mesh attributes sit at locations 0 and (for the outline's far end) 4.
+        return { index: i === 0 ? 0 : 4, vertexBuffer, componentsPerAttribute: size, componentDatatype: ComponentDatatype.FLOAT };
+      });
       const vertexArray = new VertexArray({
         context,
         indexBuffer,
-        attributes: [
-          { index: 0, vertexBuffer: unitBuffer, componentsPerAttribute: 3, componentDatatype: ComponentDatatype.FLOAT },
-          { index: 1, vertexBuffer: this.instanceBuffer, componentsPerAttribute: 3, componentDatatype: ComponentDatatype.FLOAT, offsetInBytes: 0, strideInBytes: STRIDE, instanceDivisor: 1 },
-          { index: 2, vertexBuffer: this.instanceBuffer, componentsPerAttribute: 3, componentDatatype: ComponentDatatype.FLOAT, offsetInBytes: 12, strideInBytes: STRIDE, instanceDivisor: 1 },
-          { index: 3, vertexBuffer: this.instanceBuffer, componentsPerAttribute: 4, componentDatatype: ComponentDatatype.FLOAT, offsetInBytes: 24, strideInBytes: STRIDE, instanceDivisor: 1 },
-          { index: 4, vertexBuffer: this.colorBuffer, componentsPerAttribute: 4, componentDatatype: ComponentDatatype.UNSIGNED_BYTE, normalize: true, instanceDivisor: 1 },
-        ],
+        attributes: [...meshAttributes, instanced(1, 3, 0), instanced(2, 3, 12), instanced(3, 4, 24)],
       });
-      this.resources.push(vertexArray, unitBuffer, indexBuffer);
+      this.resources.push(vertexArray, indexBuffer);
       return new DrawCommand({
-        primitiveType,
+        primitiveType: PrimitiveType.TRIANGLES,
         vertexArray,
-        shaderProgram: this.shader,
-        renderState: RenderState.fromCache({
-          depthTest: { enabled: true },
-          depthMask: false,
-          blending: BlendingState.ALPHA_BLEND,
-        }),
-        uniformMap: { u_alpha: () => alpha },
-        pass: Pass.TRANSLUCENT,
+        shaderProgram,
+        renderState,
+        uniformMap,
+        // Opaque pass, not translucent: translucent commands may be rendered into OIT's own
+        // framebuffer (no stencil). We blend by hand and never write depth, so nothing else
+        // is affected, and OIT can stay on for the rest of the scene.
+        pass: Pass.OPAQUE,
         owner: this,
         modelMatrix: undefined,
       });
     };
 
-    // Fill first so the (opaque) outline blends on top of it.
-    if (mesh.fill) this.commands.push(make(mesh.fill, FILL_ALPHA));
-    if (mesh.line) this.commands.push(make(mesh.line, 1));
+    // Order matters: the fill must run first so the stencil is complete when the outline tests it.
+    // Within one pass Cesium keeps push order for commands sharing a bounding volume.
+    const outlineOnly = this.style === "outline";
+    this.commands.push(
+      make(
+        mesh.fill,
+        this.fillShader,
+        RenderState.fromCache({
+          depthTest: { enabled: true },
+          depthMask: false,
+          blending: BlendingState.ALPHA_BLEND,
+          colorMask: { red: !outlineOnly, green: !outlineOnly, blue: !outlineOnly, alpha: !outlineOnly },
+          stencilTest: stencilTest(MARK),
+          stencilMask: COVERED_BIT,
+        }),
+        { u_alpha: () => FILL_ALPHA },
+      ),
+    );
+    if (mesh.line) {
+      this.commands.push(
+        make(
+          mesh.line,
+          this.lineShader,
+          RenderState.fromCache({
+            depthTest: { enabled: true },
+            depthMask: false,
+            blending: BlendingState.ALPHA_BLEND,
+            stencilTest: stencilTest(KEEP),
+            stencilMask: 0,
+          }),
+          { u_widthPx: () => OUTLINE_PX * 2 },
+        ),
+      );
+    }
   }
 
   isDestroyed() {
@@ -287,8 +379,9 @@ class FieldsPrimitive {
   destroy() {
     this.releaseMesh();
     this.releaseInstanceBuffers();
-    this.shader?.destroy();
-    this.shader = null;
+    this.fillShader?.destroy();
+    this.lineShader?.destroy();
+    this.fillShader = this.lineShader = null;
     return undefined;
   }
 }
@@ -310,8 +403,6 @@ export class ShaderRenderer {
     this.stats = stats;
     this.primitive = null;
     this.instances = new Float32Array(0);
-    this.colors = new Uint8Array(0);
-    this.colorCount = 0;
     this.awaitFirstFrame = false;
   }
 
@@ -328,13 +419,6 @@ export class ShaderRenderer {
 
     if (this.instances.length < n * FLOATS) this.instances = new Float32Array(n * FLOATS);
     const data = this.instances;
-
-    // Colors depend only on field ids; rebuild when the field set changes size.
-    const colorsChanged = this.colorCount !== n;
-    if (colorsChanged) {
-      this.colors = new Uint8Array(n * 4);
-      this.colorCount = n;
-    }
 
     let cx = 0, cy = 0, cz = 0, maxRadius = 0;
     for (let i = 0; i < n; i++) {
@@ -354,14 +438,6 @@ export class ShaderRenderer {
       cy += scratchEcef[1];
       cz += scratchEcef[2];
       if (f.radius > maxRadius) maxRadius = f.radius;
-      if (colorsChanged) {
-        const [r, g, b] = fieldRgb(f.id);
-        const c = i * 4;
-        this.colors[c] = Math.round(r * 255);
-        this.colors[c + 1] = Math.round(g * 255);
-        this.colors[c + 2] = Math.round(b * 255);
-        this.colors[c + 3] = 255;
-      }
     }
 
     // Bounding sphere for culling/sorting: centroid + farthest field + its radius.
@@ -378,13 +454,13 @@ export class ShaderRenderer {
     prim.boundingSphere.radius = far + maxRadius * 1.1 + Math.abs(height) + 10;
 
     prim.setMesh(params.primitiveStyle === "points" ? "fill+outline" : params.primitiveStyle, params.segments, params.rings);
-    prim.setInstances(data, this.colors, n, colorsChanged);
+    prim.setInstances(data, n);
     this.awaitFirstFrame = true;
 
     const s = this.stats;
     s.updates++;
     s.mainBuildMs = performance.now() - t0;
-    s.transferBytes = n * (STRIDE + (colorsChanged ? 4 : 0));
+    s.transferBytes = n * STRIDE;
     const m = params.segments + 1;
     const fillVerts = 1 + params.rings * m;
     s.vertices = n * fillVerts;
