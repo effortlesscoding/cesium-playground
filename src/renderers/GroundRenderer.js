@@ -7,6 +7,10 @@
 // plane and tests whether it lies inside the circle/pie. So the shapes follow terrain and
 // buildings exactly, and edges are analytic (anti-aliased distance fields) at any zoom.
 //
+// An optional cone (coneTiltDeg / coneOpeningDeg) narrows each wedge to the top-down shadow of a
+// cone aimed at the middle of the wedge; this is applied while packing the instances, so the
+// shader below just draws whatever pie it is given.
+//
 // Limits: only surfaces in the depth texture are painted (globe, terrain, 3D tiles; not
 // ordinary opaque primitives), and anything within +/- groundRange meters of the field's center
 // height is projected onto, including walls. Merging and the outline-of-the-union work exactly

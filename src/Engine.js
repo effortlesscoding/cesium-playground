@@ -6,6 +6,7 @@ import { PrimitiveRenderer } from "./renderers/PrimitiveRenderer.js";
 import { ImageryRenderer } from "./renderers/ImageryRenderer.js";
 import { ShaderRenderer } from "./renderers/ShaderRenderer.js";
 import { GroundRenderer } from "./renderers/GroundRenderer.js";
+import { RedBoxRenderer } from "./renderers/RedBoxRenderer.js";
 
 const newRendererStats = () => ({
   updates: 0,
@@ -46,6 +47,7 @@ export class Engine {
     this.imagery = new ImageryRenderer(viewer, this.stats.imagery);
     this.shader = new ShaderRenderer(viewer, this.stats.shader);
     this.ground = new GroundRenderer(viewer, this.stats.ground);
+    this.box = new RedBoxRenderer(viewer);
     this.primitive.onApplied = () => (this.awaitFirstFrame = true);
     this.installFrameMonitor();
     this.applyMode();
@@ -101,6 +103,10 @@ export class Engine {
     return this.params.mode === "shader";
   }
 
+  get useBox() {
+    return this.params.mode === "box";
+  }
+
   get useGround() {
     return this.params.mode === "ground";
   }
@@ -115,7 +121,7 @@ export class Engine {
     if (next.fieldCount !== prev.fieldCount) this.fields = generateFields(next.fieldCount, REGION);
     if (next.updateIntervalMs !== prev.updateIntervalMs) this.restartTimer();
     if (next.mode !== prev.mode) this.applyMode();
-    const geometryChanged = ["fieldCount", "segments", "rings", "primitiveStyle", "heightMeters", "groundRange", "tileSize", "maximumLevel", "mode"]
+    const geometryChanged = ["fieldCount", "segments", "rings", "primitiveStyle", "heightMeters", "groundRange", "coneTiltDeg", "coneOpeningDeg", "boxSizeMeters", "boxColor", "tileSize", "maximumLevel", "mode"]
       .some((k) => next[k] !== prev[k]);
     if (geometryChanged) this.render();
   }
@@ -125,6 +131,7 @@ export class Engine {
     if (!this.useImagery) this.imagery.clear();
     if (!this.useShader) this.shader.clear();
     if (!this.useGround) this.ground.clear();
+    if (!this.useBox) this.box.clear();
   }
 
   restartTimer() {
@@ -142,6 +149,8 @@ export class Engine {
     if (this.useImagery) this.imagery.update(this.fields, this.params);
     if (this.useShader) this.shader.update(this.fields, this.params);
     if (this.useGround) this.ground.update(this.fields, this.params);
+    // For now the box is always placed at the center of the Abu Dhabi region.
+    if (this.useBox) this.box.update(this.params, { lon: REGION.lon, lat: REGION.lat, height: 0 });
   }
 
   resetCounters() {
@@ -159,5 +168,6 @@ export class Engine {
     this.imagery.destroy();
     this.shader.destroy();
     this.ground.destroy();
+    this.box.destroy();
   }
 }

@@ -18,7 +18,7 @@ import {
   StencilOperation,
   VertexArray,
 } from "cesium";
-import { TWO_PI, DEG, clockSpan, toEcef } from "../geo.js";
+import { TWO_PI, DEG, clockSpan, coneShadowHalfWidth, toEcef } from "../geo.js";
 
 // Per-instance dynamic data, in floats: centerHigh(3) centerLow(3) shape(4).
 export const FLOATS = 10;
@@ -224,8 +224,13 @@ function splitInto(out, offset, value) {
 /**
  * Packs the fields into `data` (FLOATS per field) and fits `sphere` around them, padded by
  * `extra` meters, for culling.
+ *
+ * `coneHalf` is the half-width (radians) of the cone's top-down shadow, see coneShadowHalfWidth.
+ * The cone's center line points at the middle of each pie, so the shadow and the pie are wedges
+ * around the same azimuth and their overlap is simply the narrower one. A full circle has no
+ * middle; its start bearing is used as the cone axis. PI means the cone trims nothing.
  */
-function packFields(fields, height, data, sphere, extra) {
+function packFields(fields, height, data, sphere, extra, coneHalf = Math.PI) {
   const n = fields.length;
   let cx = 0, cy = 0, cz = 0, maxRadius = 0;
   for (let i = 0; i < n; i++) {
@@ -236,10 +241,21 @@ function packFields(fields, height, data, sphere, extra) {
     splitInto(data, o + 1, scratchEcef[1]);
     splitInto(data, o + 2, scratchEcef[2]);
     const span = clockSpan(f);
-    const full = span < 1e-9;
+    let full = span < 1e-9;
+    let start = (f.startClock / 12) * TWO_PI;
+    let sweep = full ? TWO_PI : (span / 12) * TWO_PI;
+    if (coneHalf < Math.PI) {
+      const half = Math.min(sweep / 2, coneHalf);
+      if (full || half < sweep / 2) {
+        const axis = full ? start : start + sweep / 2;
+        start = axis - half;
+        sweep = 2 * half;
+        full = false;
+      }
+    }
     data[o + 6] = f.radius;
-    data[o + 7] = (f.startClock / 12) * TWO_PI;
-    data[o + 8] = full ? TWO_PI : (span / 12) * TWO_PI;
+    data[o + 7] = start;
+    data[o + 8] = sweep;
     data[o + 9] = full ? 1 : 0;
     cx += scratchEcef[0];
     cy += scratchEcef[1];
@@ -281,7 +297,8 @@ export class InstancedRenderer {
     const n = fields.length;
 
     if (this.instances.length < n * FLOATS) this.instances = new Float32Array(n * FLOATS);
-    packFields(fields, params.heightMeters, this.instances, prim.boundingSphere, this.boundingPadding(params));
+    const coneHalf = coneShadowHalfWidth(params.coneTiltDeg, params.coneOpeningDeg);
+    packFields(fields, params.heightMeters, this.instances, prim.boundingSphere, this.boundingPadding(params), coneHalf);
     prim.setMesh(this.meshOptions(params));
     prim.setInstances(this.instances, n);
     this.awaitFirstFrame = true;

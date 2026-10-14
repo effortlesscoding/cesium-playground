@@ -14,6 +14,14 @@ export const DEFAULT_PARAMS = {
   // A: what to draw from the generated Cartesian3 points.
   primitiveStyle: "fill+outline", // "fill+outline" | "fill" | "outline" | "points"
   heightMeters: 10,
+  // C, D: a cone with its apex at each field's center, its center line pointing at the middle of
+  // the field's azimuth wedge. The wedge is trimmed to the cone's top-down shadow, which is the
+  // full circle (no trim) when the cone is wide or steep enough. 360 = cone off.
+  coneTiltDeg: 0,
+  coneOpeningDeg: 360,
+  // E (tutorial box): edge length in meters and CSS color.
+  boxSizeMeters: 2000,
+  boxColor: "#ff0000",
   // D: fields are projected onto any surface within +/- this many meters of the field's height.
   groundRange: 1000,
   // "flat" = ellipsoid; "hills" = synthetic terrain to show which modes follow the ground.

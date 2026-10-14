@@ -18,6 +18,7 @@ const MODES = [
   { value: "imagery", label: "B · Imagery" },
   { value: "shader", label: "C · Shader" },
   { value: "ground", label: "D · Ground" },
+  { value: "box", label: "E · Red box" },
   { value: "both", label: "Both" },
   { value: "none", label: "None" },
 ];
@@ -30,6 +31,9 @@ const NUMBER_PARAMS = [
   { key: "rings", label: "Fill rings (A, C)", min: 1, max: 128, step: 1 },
   { key: "heightMeters", label: "Height m (A, C, D)", min: 0, max: 50000, step: 10 },
   { key: "groundRange", label: "Clamp range ± m (D)", min: 10, max: 20000, step: 10 },
+  { key: "coneTiltDeg", label: "Cone tilt ° above horizon (C, D)", min: 0, max: 90, step: 1 },
+  { key: "coneOpeningDeg", label: "Cone opening ° (C, D; 360 = off)", min: 1, max: 360, step: 1 },
+  { key: "boxSizeMeters", label: "Box size m (E)", min: 1, max: 100000, step: 100 },
   { key: "geometryWorkers", label: "Geometry workers (A)", min: 1, max: 16, step: 1 },
   { key: "tileWorkers", label: "Tile workers (B)", min: 1, max: 16, step: 1 },
   { key: "maximumLevel", label: "Max tile level (B)", min: 0, max: 20, step: 1 },
@@ -175,6 +179,7 @@ export default function App() {
       <div ref={containerRef} className="viewer" />
       <aside className="panel">
         <h1>Circular fields</h1>
+        <p className="hint"><a href="#/faces" style={{ color: "var(--accent)" }}>Cube face checker →</a></p>
 
         <section>
           <div className="modes">
@@ -216,6 +221,10 @@ export default function App() {
               <option value="outline">outline</option>
               <option value="points">points</option>
             </select>
+          </label>
+          <label>
+            <span>Box color (E)</span>
+            <input type="color" value={params.boxColor} onChange={(e) => set("boxColor", e.target.value)} />
           </label>
           <label>
             <span>Terrain</span>

@@ -17,6 +17,24 @@ export function clockSpan(field) {
 }
 
 /**
+ * Half-width (radians) of the top-down shadow of a cone, measured around the azimuth of the cone's
+ * center line. The cone's apex is at the field center, its center line points `tiltDeg` above the
+ * horizon and its full opening angle is `openingDeg`.
+ *
+ * Seen from straight above, the cone covers every azimuth offset d for which some ray inside the
+ * cone has that azimuth: sin(d) <= sin(half) / cos(tilt). When the cone's edge just touches
+ * straight up (tilt + half = 90 degrees) the shadow is a half-plane (d = 90 degrees). Once the
+ * cone strictly contains straight up (tilt + half > 90 degrees), rays near vertical cover every
+ * azimuth and the shadow is the full circle, so this returns PI (meaning "no trim").
+ */
+export function coneShadowHalfWidth(tiltDeg, openingDeg) {
+  const tilt = Math.min(Math.abs(tiltDeg), 90) * DEG;
+  const half = (Math.min(Math.max(openingDeg, 0), 360) / 2) * DEG;
+  if (tilt + half > Math.PI / 2 + 1e-9) return Math.PI;
+  return Math.asin(Math.min(1, Math.sin(half) / Math.cos(tilt)));
+}
+
+/**
  * Describes how the outer arc of a field is sampled.
  * - full circle: `segments` samples, closed ring
  * - pie/pacman: samples proportional to the swept angle, open arc (center closes it)
